@@ -4,8 +4,6 @@ module Lib
       , Op(..)
       , Name
       , Assignment
-      , eval
-      , evalWithReader
       , State(..)
       , MaybeT(..)
       , eval3
@@ -19,41 +17,12 @@ type Name = String
 data Expr = Literal Integer
           | Var Name
           | Op Op Expr Expr
+          | Assign Name Expr
+          | Sequence [Expr]
 
 data Op = Add | Subtract | Multiply | Divide
 
 type Assignment = [(Name, Integer)]
-
-eval :: Expr -> Assignment -> Maybe Integer
-eval (Literal n) _ = return n
-eval (Var v)     a = lookup v a -- lookup returns Nothing if not present
-eval (Op o x y)  a = do u <- eval x a
-                        v <- eval y a
-                        case o of
-                          Add      -> return (u + v)
-                          Subtract -> return (u - v)
-                          Multiply -> return (u * v)
-                          Divide   -> if v == 0 then Nothing
-                                                else return (u `div` v)
-
-
-evalWithReader :: Expr -> Reader Assignment (Maybe Integer)
-evalWithReader (Literal n) = return (Just n)
-evalWithReader (Var v)     = do
-  a <- ask
-  return $ lookup v a -- lookup returns Nothing if not present
-evalWithReader (Op o x y) = do u <- evalWithReader x
-                               v <- evalWithReader y
-                               case (u, v) of
-                                 (Nothing, _) -> return Nothing
-                                 (_, Nothing) -> return Nothing
-                                 (Just u', Just v') ->
-                                   case o of
-                                     Add      -> return (Just (u' + v'))
-                                     Subtract -> return (Just (u' - v'))
-                                     Multiply -> return (Just (u' * v'))
-                                     Divide   -> if v' == 0 then return Nothing
-                                                            else return (Just (u' `div` v'))
 
 ----------------------------------
 --eval3 :: Expr -> MaybeT (State Assignment) Integer
@@ -138,8 +107,26 @@ eval3 (Op o x y)  = do
     Add      -> return (u + v)
     Subtract -> return (u - v)
     Multiply -> return (u * v)
-    Divide   -> if v == 0 then divisionByZeroResult
+    Divide   -> if v == 0 then emptyResult
                           else return (u `div` v)
+eval3 (Assign name expr) = MaybeT $ do
+  v <- runMaybeT (eval3 expr)
+  a <- get
+  case v of
+    Nothing -> emptyResultState
+    Just value -> do
+      let update pair@(eachName, eachValue) = if eachName == name
+                                                then (eachName, value)
+                                                else pair
+      put $ fmap update a
+      return $ Just value
+eval3 (Sequence [x]) = eval3 x
+eval3 (Sequence (x:xs)) = do
+  eval3 x
+  eval3 (Sequence xs)
 
-divisionByZeroResult :: MaybeT (State Assignment) Integer
-divisionByZeroResult = MaybeT $ State $ \s -> (Nothing, s)
+emptyResult :: MaybeT (State Assignment) Integer
+emptyResult = MaybeT $ State $ \s -> (Nothing, s)
+
+emptyResultState :: State Assignment (Maybe Integer)
+emptyResultState = State $ \s -> (Nothing, s)
